@@ -1,3 +1,11 @@
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: '10mb',
+    },
+  },
+};
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -19,25 +27,41 @@ export default async function handler(req, res) {
     });
     const { token } = await authRes.json();
 
-    // 2. Start imagepdf task
+    // 2. Start
     const startRes = await fetch('https://api.ilovepdf.com/v1/start/imagepdf', {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     const { server, task } = await startRes.json();
 
-    // 3. Upload image
+    // 3. Upload
+    const boundary = '----FormBoundary' + Math.random().toString(36).slice(2);
     const imgBuffer = Buffer.from(imageBase64, 'base64');
-    const FormData = (await import('form-data')).default;
-    const formData = new FormData();
-    formData.append('task', task);
-    formData.append('file', imgBuffer, { filename: fileName || 'image.jpg' });
+    const contentType = fileName?.toLowerCase().includes('.png') ? 'image/png' : 'image/jpeg';
+    
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\n`),
+      Buffer.from(`Content-Disposition: form-data; name="task"\r\n\r\n`),
+      Buffer.from(`${task}\r\n`),
+      Buffer.from(`--${boundary}\r\n`),
+      Buffer.from(`Content-Disposition: form-data; name="file"; filename="${fileName || 'image.jpg'}"\r\n`),
+      Buffer.from(`Content-Type: ${contentType}\r\n\r\n`),
+      imgBuffer,
+      Buffer.from(`\r\n--${boundary}--\r\n`)
+    ]);
 
     const uploadRes = await fetch(`https://${server}/v1/upload`, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}`, ...formData.getHeaders() },
-      body: formData
+      headers: { 
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': `multipart/form-data; boundary=${boundary}`
+      },
+      body: body
     });
     const uploadData = await uploadRes.json();
+
+    if (!uploadData.server_filename) {
+      throw new Error('Upload failed: ' + JSON.stringify(uploadData));
+    }
 
     // 4. Process
     await fetch(`https://${server}/v1/process`, {
