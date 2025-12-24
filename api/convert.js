@@ -1,5 +1,12 @@
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: '10mb',
+    },
+  },
+};
+
 export default async function handler(req, res) {
-  // Habilitar CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -13,7 +20,6 @@ export default async function handler(req, res) {
   }
 
   const ILOVEPDF_PUBLIC = 'project_public_8a1b11ee5492d1a56b09506622bacd55_YPLksbdfc1c7acbbbc1f617c571ac10ecf640';
-  const ILOVEPDF_SECRET = 'secret_key_31c69ed0b550531225a3ff29ca9d0aed_shRAg3ca20b25beafda71c239721187d44a68';
 
   try {
     const { fileBase64, fileName } = req.body;
@@ -27,31 +33,43 @@ export default async function handler(req, res) {
     const authData = await authRes.json();
     const token = authData.token;
 
-    // 2. Iniciar tarefa PDF to Word
+    // 2. Iniciar tarefa
     const startRes = await fetch('https://api.ilovepdf.com/v1/start/pdfoffice', {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     const startData = await startRes.json();
     const { server, task } = startData;
 
-    // 3. Upload do arquivo
+    // 3. Upload usando fetch com Blob (sem form-data)
+    const boundary = '----FormBoundary' + Math.random().toString(36).slice(2);
     const fileBuffer = Buffer.from(fileBase64, 'base64');
-    const FormData = (await import('form-data')).default;
-    const formData = new FormData();
-    formData.append('task', task);
-    formData.append('file', fileBuffer, { filename: fileName || 'document.pdf' });
+    
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\n`),
+      Buffer.from(`Content-Disposition: form-data; name="task"\r\n\r\n`),
+      Buffer.from(`${task}\r\n`),
+      Buffer.from(`--${boundary}\r\n`),
+      Buffer.from(`Content-Disposition: form-data; name="file"; filename="${fileName || 'document.pdf'}"\r\n`),
+      Buffer.from(`Content-Type: application/pdf\r\n\r\n`),
+      fileBuffer,
+      Buffer.from(`\r\n--${boundary}--\r\n`)
+    ]);
 
     const uploadRes = await fetch(`https://${server}/v1/upload`, {
       method: 'POST',
       headers: { 
         'Authorization': `Bearer ${token}`,
-        ...formData.getHeaders()
+        'Content-Type': `multipart/form-data; boundary=${boundary}`
       },
-      body: formData
+      body: body
     });
     const uploadData = await uploadRes.json();
 
-    // 4. Processar conversão
+    if (!uploadData.server_filename) {
+      throw new Error('Upload failed: ' + JSON.stringify(uploadData));
+    }
+
+    // 4. Processar
     const processRes = await fetch(`https://${server}/v1/process`, {
       method: 'POST',
       headers: { 
@@ -76,7 +94,7 @@ export default async function handler(req, res) {
     return res.status(200).json({ 
       success: true, 
       wordBase64,
-      filename: fileName.replace(/\.[^/.]+$/, '') + '.docx'
+      filename: (fileName || 'document').replace(/\.[^/.]+$/, '') + '.docx'
     });
 
   } catch (error) {
